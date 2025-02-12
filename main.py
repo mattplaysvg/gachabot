@@ -706,6 +706,11 @@ async def add_cardurl(interaction: Interaction, name: str, urls: str = '', local
 )
 async def add_cardurl_r18(interaction: Interaction, name: str, urls: str = '', localdata: str = ''):
     try:
+        # 確保指令只能在 NSFW 頻道執行
+        if not interaction.channel.nsfw:
+            await interaction.response.send_message("⚠️ 此指令只能在 NSFW 頻道內使用！", ephemeral=True)
+            return
+
         # 延遲回應
         await interaction.response.defer()
 
@@ -943,6 +948,11 @@ async def search_card(interaction: discord.Interaction, name: str):
 @app_commands.describe(name="卡片名稱 (英文))")
 async def search_card_r18(interaction: discord.Interaction, name: str):
     try:
+        # 確保指令只能在 NSFW 頻道執行
+        if not interaction.channel.nsfw:
+            await interaction.response.send_message("⚠️ 此指令只能在 NSFW 頻道內使用！", ephemeral=True)
+            return
+
         # 查詢符合條件的卡片及其所有 URL
         cursor.execute(''' 
             SELECT cards.id, cards.name_1, cards.atk, cards.def_, card_urls_2.url
@@ -1699,7 +1709,12 @@ DAILY_LIMIT = 3
 user_match_data = {}  # 用於追蹤用戶每日挑戰次數與上次刷新時間
 # 對戰匹配系統
 @bot.tree.command(name="match", description="匹配並挑戰其他玩家(全伺服器連動)")
-async def match(interaction: discord.Interaction):
+async def match(interaction: discord.Interaction):   
+    # 確保指令只能在 NSFW 頻道執行
+    if not interaction.channel.nsfw:
+        await interaction.response.send_message("⚠️ 此指令只能在 NSFW 頻道內使用！", ephemeral=True)
+        return
+
     user_id = interaction.user.id
 
     # 初始化用戶挑戰數據
@@ -2559,7 +2574,7 @@ async def push_to_github():
     except Exception as e:
         print(f"⚠️ 發生錯誤: {e}")
 
-@tasks.loop(hours=1)
+@tasks.loop(minutes=59)
 async def auto_push():
     """每小時自動推送"""
 
@@ -2963,6 +2978,11 @@ async def profile(ctx):
 
 @bot.command(name="match", help="匹配並挑戰其他玩家(全伺服器)")
 async def match(ctx):
+    # 確保指令只能在 NSFW 頻道執行
+    if not ctx.channel.nsfw:
+        await ctx.send("⚠️ 此指令只能在 NSFW 頻道內使用！", ephemeral=True)
+        return
+
     user_id = ctx.author.id
 
     # 初始化用戶挑戰數據
