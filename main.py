@@ -4404,6 +4404,14 @@ async def increase(ctx, *, url: str):
         await ctx.send("❌無效的 YouTube 連結！請提供正確的 URL")
         return
 
+    # 檢查是否已經存在相同的 URL
+    cursor.execute("SELECT COUNT(*) FROM song WHERE user_id = ? AND url = ?", (ctx.author.id, url))
+    (count,) = cursor.fetchone()
+
+    if count > 0:
+        await ctx.send("⚠️ 你已經儲存過這首歌了！")
+        return
+
     cursor.execute("INSERT INTO song (user_id, url) VALUES (?, ?)", (ctx.author.id, url))
     conn.commit()
     await ctx.send(f"✅已儲存至資料庫：{url}")
@@ -4579,6 +4587,14 @@ async def increase(interaction: discord.Interaction, *, url: str):
     """ 把 URL 儲存到資料庫 (加入 URL 格式檢查) """
     if not YOUTUBE_URL_PATTERN.match(url):
         await interaction.response.send_message("❌無效的 YouTube 連結！請提供正確的 URL")
+        return
+
+    # 檢查是否已經存在相同的 URL
+    cursor.execute("SELECT COUNT(*) FROM song WHERE user_id = ? AND url = ?", (interaction.user.id, url))
+    (count,) = cursor.fetchone()
+
+    if count > 0:
+        await interaction.response.send_message("⚠️ 你已經儲存過這首歌了！")
         return
 
     cursor.execute("INSERT INTO song (user_id, url) VALUES (?, ?)", (interaction.user.id, url))
