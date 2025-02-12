@@ -14,6 +14,7 @@ wade12345683@gmail.com
 ## 音樂播放器 (僅支援youtube)
 ඞplay <關鍵字/url> (不支援播放清單)  
 ඞplaylist  
+ඞrandom 打亂播放清單  
 ඞincrease 把 url 收進資料庫  
 ඞdecrease 刪除自己新增的 url  
 ඞwhatever 隨機播放歌曲(僅抽取自己新增的)  
