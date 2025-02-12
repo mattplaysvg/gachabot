@@ -47,6 +47,8 @@ async def on_ready():
         print(f"Slash Commands 已同步成功！")
         print(f"已登入為 {bot.user}")
         auto_push.start()  # 啟動自動推送
+        activity = discord.Game(name="神楽めあ")  # 這裡設置為顯示「正在播放音樂」
+        await bot.change_presence(activity=activity)
     except Exception as e:
         print(f"發生錯誤：{e}")
 
