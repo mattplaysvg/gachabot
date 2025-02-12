@@ -227,12 +227,8 @@ async def help(interaction: discord.Interaction):
 ඞdecrease: 從資料庫刪除歌曲 URL
 ඞincrease: 把歌曲 URL 儲存到資料庫
 ඞplay: 播放音樂(不支援playlist)
-ඞpause: 暫停播放
 ඞplaylist: 顯示播放清單
 ඞrandom: 打亂播放清單的順序
-ඞresume: 恢復播放
-ඞstop: 停止播放並離開語音
-ඞskip: 切歌
 ඞwhatever: 隨機播放歌曲 (自己)
 ඞwhatever_all: 隨機播放歌曲 (全服) 
 
@@ -4067,7 +4063,7 @@ async def start_tetris(ctx):
 # 存儲音樂隊列
 music_queue = [] 
 
-FFMPEG_PATH = "/usr/bin/ffmpeg"  # Windows
+FFMPEG_PATH = "C:/ffmpeg-7.0.2-essentials_build/bin/ffmpeg.exe"  # Windows
 # FFMPEG_PATH = "/usr/bin/ffmpeg"  # Linux / Docker
 
 # YouTube URL 正規表達式
@@ -4076,20 +4072,28 @@ YOUTUBE_URL_PATTERN = re.compile(
     r"(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)"
     r"[\w-]+"
 )
+ydl_opts = {
+    "format": "bestaudio/best",
+    "quiet": True,
+    "default_search": "ytsearch",
+    "extract_flat": False,
+    "noplaylist": True,
+}
 
 # 播放音樂的控制面板
 class MusicControlView(discord.ui.View):
     def __init__(self, source, music_queue, voice_client, current_song_duration, ctx_or_interaction, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.source = source  # 音樂來源
+        self.source = source  # 音樂標題
         self.music_queue = music_queue
         self.voice_client = voice_client
-        self.current_song_duration = current_song_duration  # 歌曲總長度 (秒)
+        self.current_song_duration = current_song_duration  # 歌曲長度 (秒)
         self.start_time = time.time()  # 記錄開始播放的時間
         self.is_playing = True
         self.ctx_or_interaction = ctx_or_interaction  # 支援 ctx 或 interaction
         self.message = None  # 存放 embed 訊息
         self.task = asyncio.create_task(self.update_progress_bar())
+        self.timeout = None  # 設置為 None，禁用超時
 
     def get_progress_bar(self):
         """ 生成播放進度條 """
@@ -4108,24 +4112,40 @@ class MusicControlView(discord.ui.View):
             
             if self.message:
                 await self.message.edit(embed=embed, view=self)
-            await asyncio.sleep(5)  # 每 5 秒更新一次
+            await asyncio.sleep(1)  # 每 1 秒更新一次
 
     async def send_music_embed(self):
         """ 送出嵌入訊息 (含進度條) """
         embed = discord.Embed(title="🎵 現在播放", description=f"{self.source}", color=0x00ff00)
         embed.add_field(name="進度", value=self.get_progress_bar(), inline=False)
-        
+
         if isinstance(self.ctx_or_interaction, discord.Interaction):
             self.message = await self.ctx_or_interaction.followup.send(embed=embed, view=self)
         else:
             self.message = await self.ctx_or_interaction.send(embed=embed, view=self)
+
+        # ✅ 確保 `self.message` 成功賦值後，才啟動進度條更新
+        self.task = asyncio.create_task(self.update_progress_bar())
+    
+    async def stopplay(self, interaction: discord.Interaction):
+        """ 停止播放並顯示停止訊息 """
+        embed = discord.Embed(title="🛑", description="", color=0xff0000)
+    
+        # 更新 message，將視圖設置為 None 以隱藏按鈕
+        if self.message:
+            await self.message.edit(embed=embed, view=None)
+    
+        # 確保停止播放音樂
+        self.is_playing = False
+        await interaction.response.edit_message(content="音樂播放已停止", view=None)
 
     @discord.ui.button(label="▶️", style=discord.ButtonStyle.green)
     async def play_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.voice_client.is_playing():
             self.voice_client.resume()
             self.is_playing = True
-            self.start_time = time.time()  # 重新開始計時
+            self.start_time = time.time() - (self.paused_time or 0)  # 恢復計時
+            self.task = asyncio.create_task(self.update_progress_bar())  # 重新啟動進度條更新
             await interaction.response.edit_message(content="▶️ 音樂恢復播放", view=self)
 
     @discord.ui.button(label="⏸️", style=discord.ButtonStyle.red)
@@ -4133,6 +4153,7 @@ class MusicControlView(discord.ui.View):
         if self.voice_client.is_playing():
             self.voice_client.pause()
             self.is_playing = False
+            self.paused_time = time.time() - self.start_time  # 記錄暫停時的播放時間
             await interaction.response.edit_message(content="⏸️ 音樂暫停", view=self)
 
     @discord.ui.button(label="⏭️", style=discord.ButtonStyle.blurple)
@@ -4148,7 +4169,7 @@ class MusicControlView(discord.ui.View):
             await self.voice_client.disconnect()
             self.music_queue.clear()
             self.is_playing = False
-            await interaction.response.edit_message(content="🛑 已停止播放", view=self)
+            await self.stopplay(interaction)
 
 # 播放清單
 class PlaylistView(discord.ui.View):
@@ -4196,28 +4217,20 @@ class PlaylistView(discord.ui.View):
 
 # 取得音樂資訊並下載音訊
 def get_audio_url(search):
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "quiet": True,
-        "default_search": "ytsearch",  # 這行讓 yt-dlp 直接搜尋 YouTube
-        "extract_flat": False,
-        "noplaylist": True,
-    }
-
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
             info = ydl.extract_info(search, download=False)
-            if "entries" in info:  # ytsearch 會回傳 entries[]
-                info = info["entries"][0]  # 取第一個結果
+            if "entries" in info:
+                info = info["entries"][0]
             
-            if "url" in info:
-                return info["url"], info.get("title", "未知標題")
+            if "url" in info and "duration" in info:
+                return info["url"], info.get("title", "未知標題"), info["duration"]
             else:
-                print(f"⚠️ 解析錯誤，沒有找到 'url'：{info}")
-                return None, None
+                print(f"⚠️ 解析錯誤，沒有找到 'url' 或 'duration'：{info}")
+                return None, None, None
         except Exception as e:
             print(f"❌ yt-dlp 解析錯誤：{e}")
-            return None, None
+            return None, None, None
 
 # 進入語音頻道
 async def join_vc(ctx_or_interaction):
@@ -4239,9 +4252,9 @@ async def join_vc(ctx_or_interaction):
             await ctx_or_interaction.response.send_message("❌ 你需要先加入語音頻道", ephemeral=True)
 
 # 播放音樂
-async def play_music(ctx_or_interaction, url, title):
+async def play_music(ctx_or_interaction, url, title, duration):
     """ 播放音樂 """
-    global music_queue  # 確保我們可以存取全域 music_queue
+    global music_queue
 
     if not music_queue:
         if isinstance(ctx_or_interaction, discord.Interaction):
@@ -4250,11 +4263,8 @@ async def play_music(ctx_or_interaction, url, title):
             await ctx_or_interaction.send("🎶 音樂佇列已清空，播放結束")
         return
 
-    url, title = music_queue.pop(0)  # 取出佇列第一首
-    if isinstance(ctx_or_interaction, discord.Interaction):
-        voice_client = ctx_or_interaction.guild.voice_client  # 取得伺服器的語音客戶端
-    else:
-        voice_client = ctx_or_interaction.guild.voice_client  # 取得伺服器的語音客戶端
+    url, title, duration = music_queue.pop(0)  # 取出佇列第一首
+    voice_client = ctx_or_interaction.guild.voice_client
 
     # 如果機器人沒有連接語音頻道，則嘗試加入
     if not voice_client:
@@ -4275,52 +4285,45 @@ async def play_music(ctx_or_interaction, url, title):
 
     # 確保 FFmpeg 存在
     if not os.path.isfile(FFMPEG_PATH):
-        if isinstance(ctx_or_interaction, discord.Interaction):
-            await ctx_or_interaction.followup.send(f"❌ FFmpeg 檔案不存在，請確認路徑: {FFMPEG_PATH}")
-        else:
-            await ctx_or_interaction.send(f"❌ FFmpeg 檔案不存在，請確認路徑: {FFMPEG_PATH}")
-        return
-
-    # 測試 FFmpeg 是否能執行
-    try:
-        test_ffmpeg = subprocess.run(
-            [FFMPEG_PATH, "-version"], capture_output=True, text=True
-        )
-        if test_ffmpeg.returncode != 0:
-            if isinstance(ctx_or_interaction, discord.Interaction):
-                await ctx_or_interaction.followup.send("❌ FFmpeg 無法執行，請確認安裝是否正確")
-            else:
-                await ctx_or_interaction.send("❌ FFmpeg 無法執行，請確認安裝是否正確")
-            return
-    except Exception as e:
-        if isinstance(ctx_or_interaction, discord.Interaction):
-            await ctx_or_interaction.followup.send(f"❌ 執行 FFmpeg 時發生錯誤: {e}")
-        else:
-            await ctx_or_interaction.send(f"❌ 執行 FFmpeg 時發生錯誤: {e}")
+        await ctx_or_interaction.send(f"❌ FFmpeg 檔案不存在，請確認路徑: {FFMPEG_PATH}")
         return
 
     # 嘗試播放音樂
     try:
         source = await discord.FFmpegOpusAudio.from_probe(
-            url,
-            executable=FFMPEG_PATH,
-            method="fallback",
-            options="-vn"
+            url, executable=FFMPEG_PATH, method="fallback", options="-vn"
         )
-        voice_client.play(source, after=lambda e: bot.loop.create_task(play_music(ctx_or_interaction, url, title)))  # 播放完畢後播放下一首
+        probe = await asyncio.create_subprocess_exec(
+            FFMPEG_PATH, "-i", url, "-f", "null", "-",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr = await probe.communicate()
+        duration_match = re.search(r"Duration: (\d+):(\d+):(\d+)\.(\d+)", stderr.decode())
+        if duration_match:
+            hours, minutes, seconds, _ = map(int, duration_match.groups())
+            current_song_duration = hours * 3600 + minutes * 60 + seconds
+        else:
+            current_song_duration = 180  # 預設 3 分鐘
+
+        voice_client.play(source, after=lambda e: bot.loop.create_task(play_music(ctx_or_interaction, url, title, current_song_duration)))
 
         if isinstance(ctx_or_interaction, discord.Interaction):
             await ctx_or_interaction.followup.send(f"🎶 正在播放: **{title}**")
         else:
             await ctx_or_interaction.send(f"🎶 正在播放: **{title}**")
 
-        # 顯示播放控制面板
-        view = MusicControlView(ctx_or_interaction, music_queue, voice_client)
-        if isinstance(ctx_or_interaction, discord.Interaction):
-            await ctx_or_interaction.followup.send(embed=discord.Embed(title="🎶 音樂播放中..."), view=view)
-        else:
-            await ctx_or_interaction.send(embed=discord.Embed(title="🎶 音樂播放中..."), view=view)
-    
+        # **✅ 傳入 `current_song_duration`**
+        view = MusicControlView(
+            source=title, 
+            music_queue=music_queue, 
+            voice_client=voice_client, 
+            current_song_duration=current_song_duration,  
+            ctx_or_interaction=ctx_or_interaction
+        )
+
+        await view.send_music_embed()  # ✅ 確保發送嵌入消息
+
     except Exception as e:
         if isinstance(ctx_or_interaction, discord.Interaction):
             await ctx_or_interaction.followup.send(f"❌ 無法播放音樂: {e}")
@@ -4355,52 +4358,22 @@ async def next_song(ctx_or_interaction):
 async def play(ctx, *, search: str):
     """ 播放 YouTube 音樂，若正在播放則加入佇列 """
     try:
-        audio_url, title = get_audio_url(search)
+        audio_url, title, duration = get_audio_url(search)
+
+        if audio_url is None:
+            await ctx.send("❌ 找不到該歌曲，請嘗試其他關鍵字")
+            return
 
         if ctx.voice_client and ctx.voice_client.is_playing():
-            music_queue.append((audio_url, title))
+            music_queue.append((audio_url, title, duration))
             await ctx.send(f"🎶 **{title}** 已加入音樂佇列")
         else:
-            music_queue.append((audio_url, title))  # 確保隊列內至少有一首
-            await play_music(ctx, audio_url, title)  # 直接開始播放
+            music_queue.append((audio_url, title, duration))  # 確保隊列內至少有一首
+            await play_music(ctx, audio_url, title, duration)  # 直接開始播放
             await ctx.send(f"🎵 **{title}** 開始播放")
 
     except Exception as e:
-        await ctx.send(f"❌發生錯誤: {e}")
-
-# 暫停音樂
-@bot.command(name="pause", help="暫停播放")
-async def pause(ctx):
-    if ctx.voice_client.is_playing():
-        ctx.voice_client.pause()
-        await ctx.send("音樂暫停")
-
-# 恢復播放
-@bot.command(name="resume", help="恢復播放")
-async def resume(ctx):
-    if ctx.voice_client.is_paused():
-        ctx.voice_client.resume()
-        await ctx.send("音樂恢復播放")
-
-# 跳過
-@bot.command(name="skip", help="跳過當前播放的音樂")
-async def skip(ctx):
-    """ 跳過當前播放的歌曲 """
-    voice_client = ctx.voice_client
-    if not voice_client or not voice_client.is_playing():
-        await ctx.send("目前沒有正在播放的音樂")
-        return
-
-    voice_client.stop()  # 停止當前播放，會觸發 `after` 事件，自動播放下一首
-    await ctx.send("已跳過當前歌曲")
-
-# 停止播放並離開頻道
-@bot.command(name="stop", help="停止播放並離開語音頻道")
-async def stop(ctx):
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
-        music_queue[ctx.guild.id] = []
-        await ctx.send("已停止播放")
+        await ctx.send(f"❌ 發生錯誤: {e}")
 
 # 顯示播放清單
 @bot.command(name="playlist", help="顯示當前播放清單")
@@ -4433,7 +4406,6 @@ async def increase(ctx, *, url: str):
     conn.commit()
     await ctx.send(f"✅已儲存至資料庫：{url}")
 
-
 # 減少歌曲 URL 從資料庫
 @bot.command(name="decrease", help="從資料庫刪除歌曲 URL")
 async def decrease(ctx, *, url: str):
@@ -4454,55 +4426,103 @@ async def decrease(ctx, *, url: str):
 
 # 隨機播放所有用戶的歌曲
 @bot.command(name="whatever", help="從資料庫隨機播放自己的歌曲")
-async def whatever(ctx):
+async def whatever(ctx: commands.Context):
     """ 從資料庫隨機播放指定 user_id 的歌曲，並確保不重複 """
+    await ctx.send("🎵 正在從資料庫選擇隨機歌曲...")
+
+    # 查詢資料庫獲取用戶儲存的歌曲 URL
     cursor.execute("SELECT url FROM song WHERE user_id = ?", (ctx.author.id,))
-    songs = [song[0] for song in cursor.fetchall()]  # 轉換為 URL 清單
+    songs = [song[0] for song in cursor.fetchall()]  # 只取出 URL
+
+    # 獲取語音客戶端
+    voice_client = ctx.guild.voice_client  
+
+    # 如果機器人沒有連接語音頻道，則嘗試加入
+    if not voice_client:
+        if ctx.author.voice:
+            channel = ctx.author.voice.channel
+            voice_client = await channel.connect()
+        else:
+            await ctx.send("❌ 你必須在語音頻道內才能播放音樂")
+            return
 
     if not songs:
-        await ctx.send("❌資料庫中沒有你的歌曲")
+        await ctx.send("❌ 資料庫中沒有你的歌曲")
         return
 
-    available_songs = list(set(songs) - set(url for url, _ in music_queue))  # 過濾掉已在佇列中的歌曲
+    # 過濾已在佇列中的歌曲
+    available_songs = list(set(songs) - {url for url, _ in music_queue})
 
     if not available_songs:
-        await ctx.send("🎵所有歌曲都已經在播放清單中了")
+        await ctx.send("🎵 所有歌曲都已經在播放清單中了")
         return
 
+    # 隨機選擇一首歌曲
     random_song = random.choice(available_songs)
-    title = "隨機歌曲"  # 這裡可以改為更具體的標題
-    music_queue.append((random_song, title))
-    await ctx.send(f"✅**{title}** 已加入播放清單🎶")
+    # 使用 get_audio_url 函數來獲取歌曲的 URL 和時長
+    audio_url, title, duration = get_audio_url(random_song)
+
+    if not audio_url:
+        await ctx.send("❌ 無法解析歌曲信息，請稍後再試")
+        return
+
+    music_queue.append((audio_url, title, duration))
+
+    await ctx.send(f"✅ **{title}** 已加入播放清單 🎶")
 
     # 如果目前沒有播放音樂，則直接開始播放
-    if not ctx.voice_client or not ctx.voice_client.is_playing():
-        await play_music(ctx, random_song, title)
+    if not voice_client.is_playing():
+        await play_music(ctx, audio_url, title, duration)
 
 # 隨機播放自己儲存的歌曲
 @bot.command(name="whatever_all", help="從資料庫隨機播放歌曲 (所有用戶)")
 async def whatever_all(ctx):
     """ 從資料庫隨機播放歌曲（不指定 user_id），並確保不重複 """
-    cursor.execute("SELECT url FROM song")
-    songs = [song[0] for song in cursor.fetchall()]  # 轉換為 URL 清單
+    await ctx.send("🎵 正在從資料庫選擇隨機歌曲...")
+
+    # 修改 SQL 查詢，確保獲取 `url` 和 `duration`
+    cursor.execute("SELECT url, duration FROM song")
+    songs = [(song[0], song[1]) for song in cursor.fetchall()]  # 轉換為 (url, duration) 清單
+
+    # 獲取語音客戶端
+    voice_client = ctx.guild.voice_client  
+
+    # 如果機器人沒有連接語音頻道，則嘗試加入
+    if not voice_client:
+        if ctx.author.voice:
+            channel = ctx.author.voice.channel
+            voice_client = await channel.connect()
+        else:
+            await ctx.send("❌ 你必須在語音頻道內才能播放音樂")
+            return
 
     if not songs:
-        await ctx.send("❌資料庫中沒有歌曲！")
+        await ctx.send("❌ 資料庫中沒有你的歌曲")
         return
 
-    available_songs = list(set(songs) - set(url for url, _ in music_queue))  # 過濾掉已在佇列中的歌曲
+    # 過濾已在佇列中的歌曲
+    available_songs = list(set(songs) - {url for url, _ in music_queue})
 
     if not available_songs:
-        await ctx.send("🎵所有歌曲都已經在播放清單中了")
+        await ctx.send("🎵 所有歌曲都已經在播放清單中了")
         return
 
+    # 隨機選擇一首歌曲
     random_song = random.choice(available_songs)
-    title = "隨機歌曲"  # 這裡可以改為更具體的標題
-    music_queue.append((random_song, title))
-    await ctx.send(f"✅**{title}** 已加入播放清單🎶")
+    # 使用 get_audio_url 函數來獲取歌曲的 URL 和時長
+    audio_url, title, duration = get_audio_url(random_song)
+
+    if not audio_url:
+        await ctx.send("❌ 無法解析歌曲信息，請稍後再試")
+        return
+
+    music_queue.append((audio_url, title, duration))
+
+    await ctx.send(f"✅ **{title}** 已加入播放清單 🎶")
 
     # 如果目前沒有播放音樂，則直接開始播放
-    if not ctx.voice_client or not ctx.voice_client.is_playing():
-        await play_music(ctx, random_song, title)
+    if not voice_client.is_playing():
+        await play_music(ctx, audio_url, title, duration)
 
 ##############################################################
 ##############################################################
@@ -4513,55 +4533,27 @@ async def whatever_all(ctx):
 @bot.tree.command(name="play", description="播放 YouTube 音樂")
 async def play(interaction: discord.Interaction, *, search: str):
     """ 播放 YouTube 音樂，若正在播放則加入佇列 """
-    try:
-        audio_url, title = get_audio_url(search)
+    await interaction.response.defer()  # 延遲回應，避免超時
 
-        if interaction.guild.voice_client and interaction.guild.voice_client.is_playing():
-            music_queue.append((audio_url, title))
-            await interaction.response.send_message(f"🎶 **{title}** 已加入音樂佇列")
+    try:
+        audio_url, title, duration = get_audio_url(search)
+
+        if audio_url is None:
+            await interaction.followup.send("❌ 找不到該歌曲，請嘗試其他關鍵字")
+            return
+
+        voice_client = interaction.guild.voice_client
+
+        if voice_client and voice_client.is_playing():
+            music_queue.append((audio_url, title, duration))
+            await interaction.followup.send(f"🎶 **{title}** 已加入音樂佇列")
         else:
-            music_queue.append((audio_url, title))  # 確保隊列內至少有一首
-            await play_music(interaction, audio_url, title)  # 直接開始播放
-            await interaction.response.send_message(f"🎵 **{title}** 開始播放")
+            music_queue.append((audio_url, title, duration))  # 確保佇列內至少有一首
+            await play_music(interaction, audio_url, title, duration)  # 直接開始播放
+            await interaction.followup.send(f"🎵 **{title}** 開始播放")
 
     except Exception as e:
-        await interaction.response.send_message(f"❌發生錯誤: {e}")
-    
-@bot.tree.command(name="pause", description="暫停播放")
-async def pause(interaction: discord.Interaction):
-    if interaction.guild.voice_client and interaction.guild.voice_client.is_playing():
-        interaction.guild.voice_client.pause()
-        await interaction.response.send_message("音樂暫停")
-    else:
-        await interaction.response.send_message("目前沒有正在播放的音樂")
-
-@bot.tree.command(name="resume", description="恢復播放")
-async def resume(interaction: discord.Interaction):
-    if interaction.guild.voice_client and interaction.guild.voice_client.is_paused():
-        interaction.guild.voice_client.resume()
-        await interaction.response.send_message("▶音樂恢復播放")
-    else:
-        await interaction.response.send_message("目前沒有正在暫停的音樂")
-
-@bot.tree.command(name="skip", description="跳過當前播放的音樂")
-async def skip(interaction: discord.Interaction):
-    """ 跳過當前播放的歌曲 """
-    voice_client = interaction.guild.voice_client
-    if not voice_client or not voice_client.is_playing():
-        await interaction.response.send_message("目前沒有正在播放的音樂")
-        return
-
-    voice_client.stop()  # 停止當前播放，會觸發 `after` 事件，自動播放下一首
-    await interaction.response.send_message("已跳過當前歌曲")
-
-@bot.tree.command(name="stop", description="停止播放並離開語音頻道")
-async def stop(interaction: discord.Interaction):
-    if interaction.guild.voice_client:
-        await interaction.guild.voice_client.disconnect()
-        music_queue[interaction.guild.id] = []
-        await interaction.response.send_message("已停止播放並離開語音頻道")
-    else:
-        await interaction.response.send_message("目前沒有在語音頻道內")
+        await interaction.followup.send(f"❌ 發生錯誤: {e}")
 
 @bot.tree.command(name="playlist", description="顯示當前播放清單")
 async def playlist(interaction: discord.Interaction):
@@ -4611,52 +4603,100 @@ async def decrease(interaction: discord.Interaction, *, url: str):
 @bot.tree.command(name="whatever", description="從資料庫隨機播放自己的歌曲")
 async def whatever(interaction: discord.Interaction):
     """ 從資料庫隨機播放指定 user_id 的歌曲，並確保不重複 """
+    await interaction.response.send_message("🎵 正在從資料庫選擇隨機歌曲...")
+
+    # 查詢資料庫獲取用戶儲存的歌曲 URL
     cursor.execute("SELECT url FROM song WHERE user_id = ?", (interaction.user.id,))
-    songs = [song[0] for song in cursor.fetchall()]  # 轉換為 URL 清單
+    songs = [song[0] for song in cursor.fetchall()]  # 只取出 URL
+
+    # 獲取語音客戶端
+    voice_client = interaction.guild.voice_client  
+
+    # 如果機器人沒有連接語音頻道，則嘗試加入
+    if not voice_client:
+        if interaction.user.voice:
+            channel = interaction.user.voice.channel
+            voice_client = await channel.connect()
+        else:
+            await interaction.followup.send("❌ 你必須在語音頻道內才能播放音樂") 
+            return
 
     if not songs:
-        await interaction.response.send_message("❌資料庫中沒有你的歌曲")
+        await interaction.followup.send("❌ 資料庫中沒有你的歌曲") 
         return
 
-    available_songs = list(set(songs) - set(url for url, _ in music_queue))  # 過濾掉已在佇列中的歌曲
+    # 過濾已在佇列中的歌曲
+    available_songs = list(set(songs) - {url for url, _ in music_queue})
 
     if not available_songs:
-        await interaction.response.send_message("🎵所有歌曲都已經在播放清單中了")
+        await interaction.followup.send("🎵 所有歌曲都已經在播放清單中了")  
         return
 
+    # 隨機選擇一首歌曲
     random_song = random.choice(available_songs)
-    title = "隨機歌曲"  # 這裡可以改為更具體的標題
-    music_queue.append((random_song, title))
-    await interaction.response.send_message(f"✅**{title}** 已加入播放清單🎶")
+    # 使用 get_audio_url 函數來獲取歌曲的 URL 和時長
+    audio_url, title, duration = get_audio_url(random_song)
+
+    if not audio_url:
+        await interaction.followup.send("❌ 無法解析歌曲信息，請稍後再試")  
+        return
+
+    music_queue.append((audio_url, title, duration))
+
+    await interaction.followup.send(f"✅ **{title}** 已加入播放清單 🎶")  
 
     # 如果目前沒有播放音樂，則直接開始播放
-    if not interaction.guild.voice_client or not interaction.guild.voice_client.is_playing():
-        await play_music(interaction, random_song, title)
+    if not voice_client.is_playing():
+        await play_music(interaction, audio_url, title, duration)
 
 @bot.tree.command(name="whatever_all", description="從資料庫隨機播放歌曲 (所有用戶)")
 async def whatever_all(interaction: discord.Interaction):
-    """ 從資料庫隨機播放歌曲（不指定 user_id），並確保不重複 """
+    """ 從資料庫隨機播放指定 user_id 的歌曲，並確保不重複 """
+    await interaction.response.send_message("🎵 正在從資料庫選擇隨機歌曲...")
+
+    # 查詢資料庫獲取用戶儲存的歌曲 URL
     cursor.execute("SELECT url FROM song")
-    songs = [song[0] for song in cursor.fetchall()]  # 轉換為 URL 清單
+    songs = [song[0] for song in cursor.fetchall()]  # 只取出 URL
+
+    # 獲取語音客戶端
+    voice_client = interaction.guild.voice_client  
+
+    # 如果機器人沒有連接語音頻道，則嘗試加入
+    if not voice_client:
+        if interaction.user.voice:
+            channel = interaction.user.voice.channel
+            voice_client = await channel.connect()
+        else:
+            await interaction.followup.send("❌ 你必須在語音頻道內才能播放音樂") 
+            return
 
     if not songs:
-        await interaction.response.send_message("❌資料庫中沒有歌曲！")
+        await interaction.followup.send("❌ 資料庫中沒有你的歌曲") 
         return
 
-    available_songs = list(set(songs) - set(url for url, _ in music_queue))  # 過濾掉已在佇列中的歌曲
+    # 過濾已在佇列中的歌曲
+    available_songs = list(set(songs) - {url for url, _ in music_queue})
 
     if not available_songs:
-        await interaction.response.send_message("🎵所有歌曲都已經在播放清單中了")
+        await interaction.followup.send("🎵 所有歌曲都已經在播放清單中了")  
         return
 
+    # 隨機選擇一首歌曲
     random_song = random.choice(available_songs)
-    title = "隨機歌曲"  # 這裡可以改為更具體的標題
-    music_queue.append((random_song, title))
-    await interaction.response.send_message(f"✅**{title}** 已加入播放清單🎶")
+    # 使用 get_audio_url 函數來獲取歌曲的 URL 和時長
+    audio_url, title, duration = get_audio_url(random_song)
+
+    if not audio_url:
+        await interaction.followup.send("❌ 無法解析歌曲信息，請稍後再試")  
+        return
+
+    music_queue.append((audio_url, title, duration))
+
+    await interaction.followup.send(f"✅ **{title}** 已加入播放清單 🎶")  
 
     # 如果目前沒有播放音樂，則直接開始播放
-    if not interaction.guild.voice_client or not interaction.guild.voice_client.is_playing():
-        await play_music(interaction, random_song, title)
+    if not voice_client.is_playing():
+        await play_music(interaction, audio_url, title, duration)
 
 ##############################################################
 ##############################################################
