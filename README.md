@@ -5,7 +5,7 @@ wade12345683@gmail.com
 ඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞ  
 # UPDATE 1.1  
 -新增氣象預報功能  
-/weather <channal_id> <location>  
+/weather <channal_id><location>  
 /weather_set <channal_id>  
 # 介紹
 功能眾多，包括但不限於:  
