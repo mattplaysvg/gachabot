@@ -2595,7 +2595,7 @@ async def push_to_github():
     except Exception as e:
         print(f"⚠️ 發生錯誤: {e}")
 
-@tasks.loop(minutes=59)
+@tasks.loop(minutes=1)
 async def auto_push():
     """每小時自動推送"""
 
@@ -4787,7 +4787,7 @@ async def get_weather(location: str):
         f"🔥 溫度：{temp}°C (體感 {feels_like}°C)\n"
         f"💦 濕度：{humidity}%\n"
         f"🌀 風速：{wind_speed} m/s\n"
-        f"🌸 氣壓：{pressure} m/s"
+        f"🌸 氣壓：{pressure} m/s\n"
         f"😶 能見度：{visibility} m/s\n"
     )
 
@@ -4796,11 +4796,49 @@ async def get_weather(location: str):
 # 設定自動發送天氣
 @bot.tree.command(name="weather_set", description="設定特定頻道的定時天氣預報")
 async def weather_set(interaction: discord.Interaction, channel: discord.TextChannel, location: str):
+    # 檢查 location 是否有效
+    weather_info = await get_weather(location)
+    if not weather_info:
+        await interaction.response.send_message("❌ 找不到該地區的天氣資訊，請確認地名是否正確")
+        return
+
+    # 檢查是否已有相同設定
+    cursor.execute("SELECT 1 FROM weather_channels WHERE guild_id = ? AND channel_id = ? AND location = ?",
+                   (interaction.guild.id, channel.id, location))
+    existing_entry = cursor.fetchone()
+
+    if existing_entry:
+        await interaction.response.send_message(f"⚠️ {channel.mention} 已經設定過 **{location}** 的天氣預報")
+        return
+
     cursor.execute("INSERT OR REPLACE INTO weather_channels (guild_id, channel_id, location) VALUES (?, ?, ?)",
                    (interaction.guild.id, channel.id, location))
     conn.commit()
 
-    await interaction.response.send_message(f"✅ 已設定 {channel.mention} 於每天固定時間發送 **{location}** 的天氣預報")
+    await interaction.response.send_message(f"✅ 已設定 {channel.mention} 於每天 7:00 發送 **{location}** 的天氣預報")
+
+@bot.command(name="weather_set", help="設定特定頻道的定時天氣預報")
+async def weather_set(ctx, channel: discord.TextChannel, *, location: str):
+    # 檢查 location 是否有效
+    weather_info = await get_weather(location)
+    if not weather_info:
+        await ctx.send("❌ 找不到該地區的天氣資訊，請確認地名是否正確")
+        return
+
+    # 檢查是否已有相同設定
+    cursor.execute("SELECT 1 FROM weather_channels WHERE guild_id = ? AND channel_id = ? AND location = ?",
+                   (ctx.guild.id, channel.id, location))
+    existing_entry = cursor.fetchone()
+
+    if existing_entry:
+        await ctx.send(f"⚠️ {channel.mention} 已經設定過 **{location}** 的天氣預報")
+        return
+    
+    cursor.execute("INSERT OR REPLACE INTO weather_channels (guild_id, channel_id, location) VALUES (?, ?, ?)",
+                   (ctx.guild.id, channel.id, location))
+    conn.commit()
+
+    await ctx.send(f"✅ 已設定 {channel.mention} 於每天 7:00 發送 **{location}** 的天氣預報")
 
 # 查詢即時天氣
 @bot.tree.command(name="weather", description="查詢指定地點的天氣預報")
@@ -4811,7 +4849,15 @@ async def weather(interaction: discord.Interaction, location: str):
     else:
         await interaction.response.send_message("❌ 找不到該地區的天氣資訊，請確認地名是否正確")
 
-# 定時任務：每天早上 7:00 發送天氣
+@bot.command(name="weather", help="查詢指定地點的天氣預報")
+async def weather(ctx, *, location: str):
+    weather_info = await get_weather(location)
+    if weather_info:
+        await ctx.send(weather_info)
+    else:
+        await ctx.send("❌ 找不到該地區的天氣資訊，請確認地名是否正確")
+
+# 每天早上 7:00 發送天氣
 @tasks.loop(hours=24)
 async def send_weather_updates():
     await bot.wait_until_ready()
