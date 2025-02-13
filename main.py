@@ -43,12 +43,22 @@ bot = commands.Bot(command_prefix=['ඞ'], intents=intents)
 @bot.event
 async def on_ready():    
     try:
+        # 同步 Slash Command
         await bot.tree.sync()
         print(f"Slash Commands 已同步成功！")
         print(f"已登入為 {bot.user}")
-        auto_push.start()  # 啟動自動推送
-        activity = discord.Game(name="神楽めあ")  # 這裡設置為顯示「正在播放音樂」
+
+        # 啟動自動推送
+        auto_push.start()
+
+        # 這裡設置為顯示「正在玩...」
+        activity = discord.Game(name="神楽めあ")
         await bot.change_presence(activity=activity)
+
+        # 氣象通知
+        send_weather_updates.start()
+        print(f"✅ {bot.user} 已啟動，天氣通知已開啟！")
+
     except Exception as e:
         print(f"發生錯誤：{e}")
 
@@ -179,6 +189,16 @@ CREATE TABLE IF NOT EXISTS song (
 )
 ''')
 
+# 創建天氣預報表
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS weather_channels (
+    guild_id INTEGER,
+    channel_id INTEGER,
+    location TEXT,
+    PRIMARY KEY (guild_id, channel_id)
+)
+''')
+
 # 定義檢查並添加欄位的函數
 def add_column_if_not_exists(table_name, column_name, column_definition):
     cursor.execute(f"PRAGMA table_info({table_name})")
@@ -262,12 +282,13 @@ async def help(interaction: discord.Interaction):
 ##############################################################
 ##############################################################
 
-# Imgur API 配置
+# API 配置
 IMGUR_CLIENT_ID = os.getenv("IMGUR_CLIENT_ID")
 IMGUR_CLIENT_SECRET = os.getenv("IMGUR_CLIENT_SECRET")
 IMGUR_USER_NAME = os.getenv("IMGUR_USER_NAME")  # 從 .env 文件中獲取帳號名稱
 ACCESS_TOKEN = os.getenv("IMGUR_ACCESS_TOKEN")  # 添加 Access Token
 REFRESH_TOKEN = os.getenv("IMGUR_REFRESH_TOKEN")  # 若需要刷新令牌
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 imgur = pyimgur.Imgur(IMGUR_CLIENT_ID)
 
 # 初始化 PyImgur 並設置 Token
@@ -4085,7 +4106,7 @@ async def start_tetris(ctx):
 # 存儲音樂隊列
 music_queue = [] 
 
-FFMPEG_PATH = "C:/ffmpeg-7.0.2-essentials_build/bin/ffmpeg.exe"  # Windows
+FFMPEG_PATH = "/usr/bin/ffmpeg"  # Windows
 # FFMPEG_PATH = "/usr/bin/ffmpeg"  # Linux / Docker
 
 # YouTube URL 正規表達式
@@ -4738,7 +4759,75 @@ async def whatever_all(interaction: discord.Interaction):
 
 ##############################################################
 ##############################################################
+#########################_氣象預報_############################
 ##############################################################
+##############################################################
+
+# 獲取天氣資訊
+async def get_weather(location: str):
+    url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={OPENWEATHER_API_KEY}&units=metric&lang=zh_tw"
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            if response.status != 200:
+                return None
+            data = await response.json()
+
+    weather_desc = data["weather"][0]["description"]
+    temp = data["main"]["temp"]
+    feels_like = data["main"]["feels_like"]
+    humidity = data["main"]["humidity"]
+    wind_speed = data["wind"]["speed"]
+    pressure = data["main"]["pressure"]
+    visibility = data["visibility"]
+
+    weather_info = (
+        f"🌍 **{location}** 天氣預報：\n"
+        f"⛅ 天氣狀況：{weather_desc}\n"
+        f"🔥 溫度：{temp}°C (體感 {feels_like}°C)\n"
+        f"💦 濕度：{humidity}%\n"
+        f"🌀 風速：{wind_speed} m/s\n"
+        f"🌸 氣壓：{pressure} m/s"
+        f"😶 能見度：{visibility} m/s\n"
+    )
+
+    return weather_info
+
+# 設定自動發送天氣
+@bot.tree.command(name="weather_set", description="設定特定頻道的定時天氣預報")
+async def weather_set(interaction: discord.Interaction, channel: discord.TextChannel, location: str):
+    cursor.execute("INSERT OR REPLACE INTO weather_channels (guild_id, channel_id, location) VALUES (?, ?, ?)",
+                   (interaction.guild.id, channel.id, location))
+    conn.commit()
+
+    await interaction.response.send_message(f"✅ 已設定 {channel.mention} 於每天固定時間發送 **{location}** 的天氣預報")
+
+# 查詢即時天氣
+@bot.tree.command(name="weather", description="查詢指定地點的天氣預報")
+async def weather(interaction: discord.Interaction, location: str):
+    weather_info = await get_weather(location)
+    if weather_info:
+        await interaction.response.send_message(weather_info)
+    else:
+        await interaction.response.send_message("❌ 找不到該地區的天氣資訊，請確認地名是否正確")
+
+# 定時任務：每天早上 7:00 發送天氣
+@tasks.loop(hours=24)
+async def send_weather_updates():
+    await bot.wait_until_ready()
+    cursor.execute("SELECT channel_id, location FROM weather_channels")
+    channels = cursor.fetchall()
+
+    for channel_id, location in channels:
+        channel = bot.get_channel(channel_id)
+        if channel:
+            weather_info = await get_weather(location)
+            if weather_info:
+                await channel.send(weather_info)
+
+##############################################################
+##############################################################
+########################_link start_##########################
 ##############################################################
 ##############################################################
 
