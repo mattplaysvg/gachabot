@@ -3,10 +3,13 @@ python-3.10.6
 made by THEMATT7374  
 wade12345683@gmail.com  
 ඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞඞ  
-# UPDATE 1.1  
--新增氣象預報功能  
-/weather  
-/weather_set  
+# UPDATE 1.2 
+-更新yt-dlp版本  
+-新增cookies.txt設定 (讓yt-dlp正常運作)  
+-新增指令:  
+ඞpersonal_songlist
+ඞnhentai_search  
+ඞnhentai_list (測試中)
 # 介紹
 功能眾多，包括但不限於:  
 -音樂機器人  
@@ -40,6 +43,10 @@ wade12345683@gmail.com
 ඞtrade 交易卡片  
 ඞdeleterecord 刪除自己的抽卡紀錄  
 想新增其他卡片可以加入伺服器  
+## 氣象預報
+ඞweather  
+ඞweather_set  
+ඞweather_remove
 ## 其他指令
 ඞtetris 俄羅斯方塊(bata)  
 ඞhello
