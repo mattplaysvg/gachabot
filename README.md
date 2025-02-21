@@ -7,7 +7,7 @@ wade12345683@gmail.com
 -更新yt-dlp版本  
 -新增cookies.txt設定 (讓yt-dlp正常運作)  
 -新增指令:  
-ඞpersonal_songlist
+ඞpersonal_songlist  
 ඞnhentai_search  
 ඞnhentai_list (測試中)
 # 介紹
