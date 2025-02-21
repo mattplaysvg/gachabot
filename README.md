@@ -6,6 +6,7 @@ wade12345683@gmail.com
 # UPDATE 1.2 
 -更新yt-dlp版本  
 -新增cookies.txt設定 (讓yt-dlp正常運作)  
+-部分函數變為非同步函數，減少卡頓  
 -新增指令:  
 ඞpersonal_songlist  
 ඞnhentai_search  
